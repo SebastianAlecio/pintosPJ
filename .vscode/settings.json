@@ -1,0 +1,9 @@
+{
+    "files.associations": {
+        "interrupt.h": "c",
+        "flags.h": "c",
+        "round.h": "c",
+        "palloc.h": "c",
+        "intr-stubs.h": "c"
+    }
+}

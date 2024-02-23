@@ -94,7 +94,15 @@ struct thread
     struct list_elem elem;              /* List element. */
     uint64_t time_sleep;
     int base_priority;      /* Prioridad base, sin tener en cuenta las donaciones. */
-    int donated_priority;   /* La prioridad mÃ¡s alta donada a este hilo. */
+    int donated_priority;   /* La prioridad mas alta donada a este hilo. */
+
+    struct lock *waiting_lock;         /* El bloqueo que el thread está esperando. */
+    struct list_elem donation_elem;    /* Elemento de lista utilizado para la lista de donaciones. */
+    struct list donations;             /* Lista de donaciones de prioridad que este thread ha recibido. */
+
+    int nice;                      /* Valor de "niceness" del hilo. */
+    int recent_cpu;                /* Estimación de la cantidad de tiempo de CPU utilizado recientemente. */
+
 
 
 #ifdef USERPROG
@@ -146,5 +154,22 @@ int thread_get_load_avg (void);
 void insertar_en_lista_espera(int64_t ticks);
 void remover_thread_durmiente(int64_t ticks);
 
+bool thread_priority_less(const struct list_elem *a, const struct list_elem *b, void *aux);
 
+void thread_update_priority(struct thread *t);
+
+void update_recent_cpu_for_thread();
+void update_load_avg(void);
+int int_to_fixed_point(int n);
+int fixed_point_to_int_round_zero(int x);
+int fixed_point_to_int_round_nearest(int x);
+int add_fixed_point(int x, int y);
+int subtract_fixed_point(int x, int y);
+int add_fixed_point_and_int(int x, int n);
+int multiply_fixed_point(int x, int y);
+int multiply_fixed_point_and_int(int x, int n);
+int divide_fixed_point(int x, int y);
+int divide_fixed_point_by_int(int x, int n);
+
+typedef int32_t fixed_point_t;
 #endif /* threads/thread.h */

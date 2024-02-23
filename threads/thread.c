@@ -20,8 +20,10 @@
    of thread.h for details. */
 #define THREAD_MAGIC 0xcd6abf4b
 
+#define F (1<<14)  // 2^14
 
 
+static int load_avg;
 static struct list wait_list;
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
@@ -97,13 +99,15 @@ thread_init (void)
   list_init (&all_list);
 
   list_init(&wait_list);
-
+  load_avg = 0;
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  initial_thread->nice = 0;
+  initial_thread->recent_cpu = 0;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -204,10 +208,6 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
-/*-------------------*/
-  t->donated_priority = -1;
-  t->base_priority = priority;
-/*-------------------*/
 
   /* Add to run queue. */
   thread_unblock (t);
@@ -248,7 +248,10 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+
+  // inserta el thread a ready list por orden de prioridad.
+  list_insert_ordered(&ready_list, &t->elem, thread_priority_less, NULL);
+
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -347,20 +350,20 @@ void
 thread_set_priority (int new_priority)
 {
   struct thread *current = thread_current();
-
+  thread_current()->priority = new_priority;
   // Si la nueva prioridad es mayor que la donada, o no hay donaciones,
   // actualizamos tanto la prioridad base como la prioridad efectiva.
   if (new_priority > current->donated_priority || current->donated_priority == -1) {
       current->base_priority = new_priority;
       current->priority = new_priority;
-      current->donated_priority = -1; // Resetear donaciÃ³n si la prioridad base es ahora la mÃ¡s alta.
+      current->donated_priority = -1; // Resetear donacion si la prioridad base es ahora la mÃ¡s alta.
   } else {
-      // Si hay una donaciÃ³n activa mÃ¡s alta que la nueva prioridad, solo actualizamos la base.
+      // Si hay una donacion activa mas alta que la nueva prioridad, solo actualizamos la base.
       current->base_priority = new_priority;
-      // La prioridad efectiva sigue siendo dictada por la donaciÃ³n, asÃ­ que no cambiamos 'current->priority'.
+      // La prioridad efectiva sigue siendo dictada por la donacion, asi­ que no cambiamos 'current->priority'.
   }
 
-  // Potencialmente, podrÃ­a necesitar ceder el CPU si la prioridad efectiva ha disminuido.
+  // Potencialmente, podri­a necesitar ceder el CPU si la prioridad efectiva ha disminuido.
   thread_yield();
 }
 
@@ -368,45 +371,40 @@ thread_set_priority (int new_priority)
 int
 thread_get_priority (void)
 {
-  struct thread *current = thread_current();
-  /* Si no hay donaciones, devuelve la prioridad base. */
-  if (current->donated_priority == -1) {
-    return current->base_priority;
-  } else {
-    /* Devuelve la mayor entre la prioridad base y la donada. */
-    return current->donated_priority > current->base_priority ? current->donated_priority : current->base_priority;
-  }
+  return thread_current ()->priority;
 }
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED)
+thread_set_nice (int new_nice)
 {
-  /* Not yet implemented. */
+  struct thread *current_thread = thread_current();
+  current_thread->nice = new_nice;
+  /* Recalcula la prioridad del hilo después de cambiar su nice value. */
+  thread_update_priority(current_thread);
+  /* Cede el CPU si hay hilos de mayor prioridad en la lista de listos. */
+  thread_yield();
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void)
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current()->nice;
 }
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void)
 {
-  /* Not yet implemented. */
-  return 0;
+  return multiply_fixed_point_and_int(load_avg , 100) / F;
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void)
 {
-  /* Not yet implemented. */
-  return 0;
+  return multiply_fixed_point_and_int(thread_current()->recent_cpu,  100) / F;
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -496,6 +494,11 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+
+  t->donated_priority = -1;
+  t->base_priority = priority;
+  t->waiting_lock = NULL;
+  list_init(&t->donations);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -629,7 +632,7 @@ void insertar_en_lista_espera(int64_t ticks){
   thread_actual->time_sleep = timer_ticks() + ticks;
 
   /*Donde TIEMPO_DORMIDO es el atributo de la estructura thread que usted
-	  definiÃ³ como paso inicial*/
+	  defina como paso inicial*/
 
   list_push_back(&wait_list, &thread_actual->elem);
   thread_block();
@@ -660,5 +663,107 @@ void remover_thread_durmiente(int64_t ticks){
 			iter = list_next(iter);
 		}
 	}
+}
 
+/* Retorna true si el thread a tiene una prioridad menor que el b */
+bool thread_priority_less(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+    struct thread *t_a = list_entry(a, struct thread, elem);
+    struct thread *t_b = list_entry(b, struct thread, elem);
+    return t_a->priority > t_b->priority;
+}
+
+void thread_update_priority(struct thread *t) {
+    int max_priority = t->base_priority;
+    struct list_elem *e;
+
+    // Itera sobre la lista de donaciones para encontrar la donación de prioridad más alta.
+    for (e = list_begin(&t->donations); e != list_end(&t->donations); e = list_next(e)) {
+        struct thread *donor = list_entry(e, struct thread, donation_elem);
+        if (donor->priority > max_priority) {
+            max_priority = donor->priority;
+        }
+    }
+
+    // Actualiza la prioridad del hilo a la máxima encontrada, respetando la donación de prioridad.
+    t->priority = max_priority;
+}
+
+void update_recent_cpu_for_thread() {
+  struct thread *t;
+  struct list_elem *e;
+  for (e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
+      t = list_entry(e, struct thread, allelem);
+
+        //recent_cpu value of the thread in RUNNING state is increased by 1 in every tick
+        if (t != idle_thread) {
+          // recent_cpu = (2 * load_avg) / (2 * load_avg + 1 ) * recent_cpu + nice
+          t->recent_cpu = add_fixed_point_and_int(multiply_fixed_point(divide_fixed_point(multiply_fixed_point_and_int(2, load_avg), add_fixed_point(multiply_fixed_point_and_int(2, load_avg), 1)), t->recent_cpu), t->nice);
+        }
+  }
+}
+
+void update_load_avg(void){
+  int ready_threads = list_size(&ready_list);
+
+  // Update the number of thread in READY state
+  if (thread_current() != idle_thread) {
+    ready_threads += 1;
+  }
+
+  // load_avg = (59/60) * load_avg + (1/60) * ready_threads
+  load_avg = divide_fixed_point_by_int(add_fixed_point(multiply_fixed_point_and_int(59, load_avg), ready_threads), 60);
+}
+
+/* Convierte un entero a punto fijo */
+int int_to_fixed_point(int n) {
+    return n * F;
+}
+
+/* Convierte un punto fijo a entero (redondeando hacia cero) */
+int fixed_point_to_int_round_zero(int x) {
+    return x / F;
+}
+
+/* Convierte un punto fijo a entero (redondeando al más cercano) */
+int fixed_point_to_int_round_nearest(int x) {
+    if (x >= 0) {
+        return (x + F / 2) / F;
+    } else {
+        return (x - F / 2) / F;
+    }
+}
+
+/* Suma dos números de punto fijo */
+int add_fixed_point(int x, int y) {
+    return x + y;
+}
+
+/* Resta dos números de punto fijo */
+int subtract_fixed_point(int x, int y) {
+    return x - y;
+}
+
+/* Añade un número de punto fijo y un entero */
+int add_fixed_point_and_int(int x, int n) {
+    return x + n * F;
+}
+
+/* Multiplica dos números de punto fijo */
+int multiply_fixed_point(int x, int y) {
+    return ((int64_t) x) * y / F;
+}
+
+/* Multiplica un número de punto fijo y un entero */
+int multiply_fixed_point_and_int(int x, int n) {
+    return x * n;
+}
+
+/* Divide dos números de punto fijo */
+int divide_fixed_point(int x, int y) {
+    return ((int64_t) x) * F / y;
+}
+
+/* Divide un número de punto fijo por un entero */
+int divide_fixed_point_by_int(int x, int n) {
+    return x / n;
 }
