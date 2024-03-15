@@ -1,9 +1,13 @@
 #ifndef THREADS_THREAD_H
 #define THREADS_THREAD_H
-
+#define USERPROG
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include <kernel/list.h>
+#include "fixed_point.h"
+
+#include <threads/synch.h>
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -24,8 +28,12 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
-/* A kernel thread or user process.
 
+
+struct lock filesys_lock; //global lock on filesystem operations.
+#define INIT_EXIT_STAT -2333 /* A kernel thread or user process.
+
+/*
    Each thread structure is stored in its own 4 kB page.  The
    thread structure itself sits at the very bottom of the page
    (at offset 0).  The rest of the page is reserved for the
@@ -92,18 +100,28 @@ struct thread
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
-    uint64_t time_sleep;
-    int base_priority;      /* Prioridad base, sin tener en cuenta las donaciones. */
-    int donated_priority;   /* La prioridad mas alta donada a este hilo. */
-
-    struct lock *waiting_lock;         /* El bloqueo que el thread está esperando. */
-    struct list_elem donation_elem;    /* Elemento de lista utilizado para la lista de donaciones. */
-    struct list donations;             /* Lista de donaciones de prioridad que este thread ha recibido. */
-
-    int nice;                      /* Valor de "niceness" del hilo. */
-    int recent_cpu;                /* Estimación de la cantidad de tiempo de CPU utilizado recientemente. */
+    uint64_t blocked_ticks;             /* ++ Blocked ticks. */
 
 
+    int base_priority;                  /* Base priority. */
+    struct list locks;	                /* Locks that the thread is holding. */
+    struct lock *lock_waiting;          /* The lock that the thread is waiting for. */
+
+
+    int nice; /* Niceness. */
+    fixed_t recent_cpu;
+
+
+    int64_t waketick;
+    bool load_success;  //if the child process is loaded successfully
+    struct semaphore load_sema;   // semaphore to keep the thread waiting until it makes sure whether the child process is successfully loaded.
+    int exit_status;
+    struct list children_list;
+    struct thread* parent;
+    struct file *self;  // its executable file
+    struct list opened_files;     //all the opened files
+    int fd_count;
+    struct child_process * waiting_child;  //pid of the child process it is currently waiting
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -114,6 +132,16 @@ struct thread
     unsigned magic;                     /* Detects stack overflow. */
   };
 
+
+  struct child_process {
+      int tid;
+      struct list_elem child_elem;   // element of itself point to its parent's child_list
+      int exit_status;   //exit status to pass it to its parent
+
+      /* "a process may wait for any given child at most once. */
+      bool if_waited;
+      struct semaphore wait_sema;
+    };
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
@@ -151,25 +179,25 @@ int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 
-void insertar_en_lista_espera(int64_t ticks);
-void remover_thread_durmiente(int64_t ticks);
+void thread_check_blocked(struct thread *, void * aux UNUSED);
 
-bool thread_priority_less(const struct list_elem *a, const struct list_elem *b, void *aux);
 
-void thread_update_priority(struct thread *t);
+bool compare_priority(const struct list_elem *, const struct list_elem *, void *);
+void thread_update_priority(struct thread *);
+bool lock_cmp_priority(const struct list_elem *, const struct list_elem *, void *);
+void thread_remove_lock(struct lock *);
+void thread_donate_priority(struct thread *);
+void thread_hold_the_lock(struct lock *);
 
-void update_recent_cpu_for_thread();
-void update_load_avg(void);
-int int_to_fixed_point(int n);
-int fixed_point_to_int_round_zero(int x);
-int fixed_point_to_int_round_nearest(int x);
-int add_fixed_point(int x, int y);
-int subtract_fixed_point(int x, int y);
-int add_fixed_point_and_int(int x, int n);
-int multiply_fixed_point(int x, int y);
-int multiply_fixed_point_and_int(int x, int n);
-int divide_fixed_point(int x, int y);
-int divide_fixed_point_by_int(int x, int n);
 
-typedef int32_t fixed_point_t;
+void thread_mlfqs_update_priority(struct thread *);
+void thread_mlfqs_update_load_avg_and_recent_cpu(void);
+void thread_mlfqs_increase_recent_cpu_by_one(void);
+
+
+bool cmp_waketick(struct list_elem *first, struct list_elem *second, void *aux);
+
 #endif /* threads/thread.h */
+#ifdef USERPROG
+struct list_elem *find_children_list(tid_t child_tid);
+#endif

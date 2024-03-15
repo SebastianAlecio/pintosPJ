@@ -8,7 +8,6 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 
-
 /* See [8254] for hardware details of the 8254 timer chip. */
 
 #if TIMER_FREQ < 19
@@ -61,7 +60,7 @@ timer_calibrate (void)
   /* Refine the next 8 bits of loops_per_tick. */
   high_bit = loops_per_tick;
   for (test_bit = high_bit >> 1; test_bit != high_bit >> 10; test_bit >>= 1)
-    if (!too_many_loops (loops_per_tick | test_bit))
+    if (!too_many_loops (high_bit | test_bit))
       loops_per_tick |= test_bit;
 
   printf ("%'"PRIu64" loops/s.\n", (uint64_t) loops_per_tick * TIMER_FREQ);
@@ -90,14 +89,17 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks)
 {
-  /* int64_t start = timer_ticks (); */
+  int64_t start = timer_ticks ();
 
   ASSERT (intr_get_level () == INTR_ON);
 
-/*   while (timer_elapsed (start) < ticks)
-    thread_yield (); */
-
-  insertar_en_lista_espera(ticks);
+  if(ticks > 0){
+	  enum intr_level old_intr_level = intr_disable();
+	  struct thread *t = thread_current();
+	  t->blocked_ticks = ticks;
+	  thread_block();
+	  intr_set_level(old_intr_level);
+  }
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -175,20 +177,15 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
-
-  struct thread *thread_actual = thread_current ();
-  if (thread_mlfqs) {
-    thread_current()->recent_cpu = add_fixed_point(thread_current()->recent_cpu, 1);
-    if (ticks % TIMER_FREQ == 0) {
-      update_recent_cpu_for_thread();
-      update_load_avg();
-    }
-    if(ticks % 4 == 0) {
-      thread_update_priority(thread_actual);
-    } //TIMER_SLICE
-  }
   thread_tick ();
-  remover_thread_durmiente(ticks);
+  thread_foreach(thread_check_blocked, NULL);
+  if (thread_mlfqs) {
+	  thread_mlfqs_increase_recent_cpu_by_one();
+	  if (ticks % TIMER_FREQ == 0)
+		  thread_mlfqs_update_load_avg_and_recent_cpu();
+	  else if (ticks % 4 == 0)
+		  thread_mlfqs_update_priority(thread_current());
+  }
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

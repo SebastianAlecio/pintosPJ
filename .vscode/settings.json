@@ -4,6 +4,7 @@
         "flags.h": "c",
         "round.h": "c",
         "palloc.h": "c",
-        "intr-stubs.h": "c"
+        "intr-stubs.h": "c",
+        "syscall.h": "c"
     }
 }
