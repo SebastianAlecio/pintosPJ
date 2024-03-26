@@ -12,19 +12,24 @@ static void syscall_handler (struct intr_frame *);
 void * is_valid_addr(const void *vaddr);
 struct process_file* search_fd(struct list* files, int fd);
 void exit_process(int status);
+int exec_process(char *file_name);
+
 void syscall_halt(void);
 void syscall_exit(struct intr_frame *f);
 int syscall_write(struct intr_frame *f);
+int syscall_exec(struct intr_frame *f);
+int syscall_wait(struct intr_frame *f);
+int syscall_create(struct intr_frame *f);
+int syscall_remove(struct intr_frame *f);
 
 
 
 void pop_stack(int *esp, int *a, int offset){
-	int *tmp_esp = esp;
-	*a = *((int *)is_valid_addr(tmp_esp + offset));
+	int *temp = esp;
+	*a = *((int *)is_valid_addr(temp + offset));
 }
 
-  /* Find fd and return process file struct in the list,
-  if not exist return NULL. */
+
 struct process_file *
 search_fd(struct list* files, int fd)
 {
@@ -38,6 +43,32 @@ search_fd(struct list* files, int fd)
 	return NULL;
 }
 
+int
+exec_process(char *file_name)
+{
+	int tid;
+	lock_acquire(&filesys_lock);
+	char * name_tmp = malloc (strlen(file_name)+1);
+	strlcpy(name_tmp, file_name, strlen(file_name) + 1);
+
+	char *tmp_ptr;
+	name_tmp = strtok_r(name_tmp, " ", &tmp_ptr);
+
+	struct file *f = filesys_open(name_tmp);
+
+	if (f == NULL)  // check if the file exists "exec-missing"
+	{
+		lock_release(&filesys_lock);
+		tid = -1;
+	}
+	else
+	{
+		file_close(f);
+		lock_release(&filesys_lock);
+		tid = process_execute(file_name);
+	}
+	return tid;
+}
 
 void syscall_halt(void){
 	shutdown_power_off();
@@ -53,6 +84,7 @@ static void
 syscall_handler (struct intr_frame *f UNUSED)
 {
   int *p = f->esp;
+  is_valid_addr(p);
   int system_call = *p;
   switch (system_call) {
     case SYS_HALT:
@@ -63,6 +95,18 @@ syscall_handler (struct intr_frame *f UNUSED)
       break;
     case SYS_WRITE:
       f->eax = syscall_write(f);
+      break;
+    case SYS_EXEC:
+      f->eax = syscall_exec(f);
+      break;
+    case SYS_WAIT:
+      f->eax = syscall_wait(f);
+      break;
+    case SYS_CREATE:
+      f->eax = syscall_create(f);
+      break;
+    case SYS_REMOVE:
+      f->eax = syscall_remove(f);
       break;
     default:
       break;
@@ -166,5 +210,61 @@ syscall_write(struct intr_frame *f)
 	return res;
 }
 
+int
+syscall_exec(struct intr_frame *f)
+{
+	char *file_name = NULL;
+	pop_stack(f->esp, &file_name, 1);
+	if (!is_valid_addr(file_name))
+		return -1;
+
+	return exec_process(file_name);
+}
+
+int
+syscall_wait(struct intr_frame *f)
+{
+	tid_t child_tid;
+	pop_stack(f->esp, &child_tid, 1);
+	return process_wait(child_tid);
+}
+
+int
+syscall_create(struct intr_frame *f)
+{
+	int res;
+	off_t initial_size;
+	char *name;
+
+	pop_stack(f->esp, &initial_size, 5);
+	pop_stack(f->esp, &name, 4);
+	if (!is_valid_addr(name))
+		res = -1;
+
+	lock_acquire(&filesys_lock);
+	res = filesys_create(name, initial_size);
+	lock_release(&filesys_lock);
+	return res;
+}
+
+int
+syscall_remove(struct intr_frame *f)
+{
+	int res;
+	char *name;
+
+	pop_stack(f->esp, &name, 1);
+	if (!is_valid_addr(name))
+		res = -1;
+
+	lock_acquire(&filesys_lock);
+	if (filesys_remove(name) == NULL)
+		res = false;
+	else
+		res = true;
+	lock_release(&filesys_lock);
+
+	return res;
+}
 
 

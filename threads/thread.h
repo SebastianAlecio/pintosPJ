@@ -138,7 +138,7 @@ struct thread
       struct list_elem child_elem;   // element of itself point to its parent's child_list
       int exit_status;   //exit status to pass it to its parent
 
-      /* "a process may wait for any given child at most once. */
+      /* "a process may wait for any given child. */
       bool if_waited;
       struct semaphore wait_sema;
     };
