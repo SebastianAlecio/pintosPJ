@@ -14,6 +14,19 @@
         "ostream": "c",
         "sstream": "c",
         "streambuf": "c",
-        "*.inc": "c"
+        "*.inc": "c",
+        "istream": "c",
+        "limits": "c",
+        "filesys.h": "c",
+        "file.h": "c",
+        "directory.h": "c",
+        "tss.h": "c",
+        "inttypes.h": "c",
+        "off_t.h": "c",
+        "thread.h": "c",
+        "syscall-nr.h": "c",
+        "vaddr.h": "c",
+        "init.h": "c",
+        "pagedir.h": "c"
     }
 }

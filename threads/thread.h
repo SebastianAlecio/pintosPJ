@@ -106,22 +106,22 @@ struct thread
     int base_priority;                  /* Base priority. */
     struct list locks;	                /* Locks that the thread is holding. */
     struct lock *lock_waiting;          /* The lock that the thread is waiting for. */
-
-
     int nice; /* Niceness. */
     fixed_t recent_cpu;
-
-
     int64_t waketick;
+
+
+
+
     bool load_success;  //if the child process is loaded successfully
-    struct semaphore load_sema;   // semaphore to keep the thread waiting until it makes sure whether the child process is successfully loaded.
+    struct semaphore load_sema;   // semaphore to keep the thread waiting until it makes sure that the child process is successfully loaded.
     int exit_status;
     struct list children_list;
     struct thread* parent;
     struct file *self;  // its executable file
     struct list opened_files;     //all the opened files
     int fd_count;
-    struct child_process * waiting_child;  //pid of the child process it is currently waiting
+    struct child_process * waiting_child;  //pid of the child process that is currently waiting
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -135,13 +135,12 @@ struct thread
 
   struct child_process {
       int tid;
-      struct list_elem child_elem;   // element of itself point to its parent's child_list
+      struct list_elem child_elem;   // parent's child_list
       int exit_status;   //exit status to pass it to its parent
-
-      /* "a process may wait for any given child. */
-      bool if_waited;
+      bool if_waited; // the process may wait for any given child
       struct semaphore wait_sema;
     };
+
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */

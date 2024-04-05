@@ -310,8 +310,8 @@ void
 thread_exit (void)
 {
   ASSERT (!intr_context ());
-  /* ++2 System Call */
-    enum intr_level old_level = intr_disable();
+  /* System Call */
+  enum intr_level old_level = intr_disable();
   if (thread_current()->parent->waiting_child != NULL)
   {
     if (thread_current()->parent->waiting_child->tid == thread_current()->tid)
@@ -653,27 +653,6 @@ cmp_waketick(struct list_elem *first, struct list_elem *second, void *aux)
 
 }
 
-struct list_elem *
-find_child_proc(tid_t child_tid)
-{
-  ASSERT (intr_get_level () == INTR_OFF);
-
-  struct list_elem *tmp_e;
-
-  for (tmp_e = list_begin (&thread_current()->children_list); tmp_e != list_end (&thread_current()->children_list);
-          tmp_e = list_next (tmp_e))
-      {
-        struct child_process *f = list_entry (tmp_e, struct child_process, child_elem);
-        if(f->tid == child_tid)
-        {
-          return tmp_e;
-        }
-      }
-  return NULL;
-}
-
-/* ++ Check if the thread should be unblocked as it's
-    blocked ticks reached to 0. */
 void thread_check_blocked (struct thread *t, void *aux UNUSED){
   if (t->status == THREAD_BLOCKED && t->blocked_ticks > 0){
 	  t->blocked_ticks--;
@@ -777,4 +756,24 @@ void thread_mlfqs_update_priority(struct thread *t) {
 	t->priority = FP_INT_PART(FP_SUB_MIX(FP_SUB(FP_CONST(PRI_MAX), FP_DIV_MIX(t->recent_cpu, 4)), 2 * t->nice));
 	t->priority = t->priority < PRI_MIN ? PRI_MIN : t->priority;
 	t->priority = t->priority > PRI_MAX ? PRI_MAX : t->priority;
+}
+
+
+struct list_elem *
+find_child_proc(tid_t child_tid)
+{
+  ASSERT (intr_get_level () == INTR_OFF);
+
+  struct list_elem *tmp_e;
+
+  for (tmp_e = list_begin (&thread_current()->children_list); tmp_e != list_end (&thread_current()->children_list);
+          tmp_e = list_next (tmp_e))
+      {
+        struct child_process *f = list_entry (tmp_e, struct child_process, child_elem);
+        if(f->tid == child_tid)
+        {
+          return tmp_e;
+        }
+      }
+  return NULL;
 }

@@ -13,6 +13,7 @@ void * is_valid_addr(const void *vaddr);
 struct process_file* search_fd(struct list* files, int fd);
 void exit_process(int status);
 int exec_process(char *file_name);
+void clean_single_file(struct list* files, int fd);
 
 void syscall_halt(void);
 void syscall_exit(struct intr_frame *f);
@@ -22,9 +23,16 @@ int syscall_wait(struct intr_frame *f);
 int syscall_create(struct intr_frame *f);
 int syscall_remove(struct intr_frame *f);
 
+int syscall_open(struct intr_frame *f);
+int syscall_read(struct intr_frame *f);
+void syscall_seek(struct intr_frame *f);
+int syscall_tell(struct intr_frame *f);
+void syscall_close(struct intr_frame *f);
+int syscall_filesize(struct intr_frame *f);
 
 
-void pop_stack(int *esp, int *a, int offset){
+
+void get_addr(int *esp, int *a, int offset){
 	int *temp = esp;
 	*a = *((int *)is_valid_addr(temp + offset));
 }
@@ -108,6 +116,24 @@ syscall_handler (struct intr_frame *f UNUSED)
     case SYS_REMOVE:
       f->eax = syscall_remove(f);
       break;
+    case SYS_OPEN:
+      f->eax = syscall_open(f);
+      break;
+    case SYS_FILESIZE:
+      f->eax = syscall_filesize(f);
+      break;
+    case SYS_READ:
+      f->eax = syscall_read(f);
+      break;
+    case SYS_SEEK:
+      syscall_seek(f);
+      break;
+    case SYS_TELL:
+      f->eax = syscall_tell(f);
+      break;
+    case SYS_CLOSE:
+      syscall_close(f);
+      break;
     default:
       break;
   }
@@ -161,12 +187,25 @@ clean_all_files(struct list* files)
 	}
 }
 
+  /* close and free specific process files
+  by the given fd in the file list. Firstly,
+  find fd in the list, then remove it. */
+void
+clean_single_file(struct list* files, int fd)
+{
+	struct process_file *proc_f = search_fd(files,fd);
+	if (proc_f != NULL){
+		file_close(proc_f->ptr);
+		list_remove(&proc_f->elem);
+    free(proc_f);
+	}
+}
 
 
 void syscall_exit(struct intr_frame *f)
 {
 	int status;
-	pop_stack(f->esp, &status, 1);
+	get_addr(f->esp, &status, 1);
 	exit_process(status);
 }
 
@@ -179,9 +218,9 @@ syscall_write(struct intr_frame *f)
 	void *buffer;
 	int fd;
 
-	pop_stack(f->esp, &size, 7);
-	pop_stack(f->esp, &buffer, 6);
-	pop_stack(f->esp, &fd, 5);
+	get_addr(f->esp, &size, 7);
+	get_addr(f->esp, &buffer, 6);
+	get_addr(f->esp, &fd, 5);
 
 	if (!is_valid_addr(buffer))
 		res = -1;
@@ -214,7 +253,7 @@ int
 syscall_exec(struct intr_frame *f)
 {
 	char *file_name = NULL;
-	pop_stack(f->esp, &file_name, 1);
+	get_addr(f->esp, &file_name, 1);
 	if (!is_valid_addr(file_name))
 		return -1;
 
@@ -225,7 +264,7 @@ int
 syscall_wait(struct intr_frame *f)
 {
 	tid_t child_tid;
-	pop_stack(f->esp, &child_tid, 1);
+	get_addr(f->esp, &child_tid, 1);
 	return process_wait(child_tid);
 }
 
@@ -236,8 +275,8 @@ syscall_create(struct intr_frame *f)
 	off_t initial_size;
 	char *name;
 
-	pop_stack(f->esp, &initial_size, 5);
-	pop_stack(f->esp, &name, 4);
+	get_addr(f->esp, &initial_size, 5);
+	get_addr(f->esp, &name, 4);
 	if (!is_valid_addr(name))
 		res = -1;
 
@@ -253,7 +292,7 @@ syscall_remove(struct intr_frame *f)
 	int res;
 	char *name;
 
-	pop_stack(f->esp, &name, 1);
+	get_addr(f->esp, &name, 1);
 	if (!is_valid_addr(name))
 		res = -1;
 
@@ -267,4 +306,129 @@ syscall_remove(struct intr_frame *f)
 	return res;
 }
 
+int
+syscall_open(struct intr_frame *f)
+{
+	int res;
+	char *name;
 
+	get_addr(f->esp, &name, 1);
+
+	if (!is_valid_addr(name) || strlen(name) == 0){
+		res = -1;
+		return res;
+	}
+
+
+	lock_acquire(&filesys_lock);
+	struct file *fptr = filesys_open(name);
+	lock_release(&filesys_lock);
+
+	if (fptr == NULL)
+		res = -1;
+	else
+	{
+		struct process_file *pfile = malloc(sizeof(*pfile));
+		pfile->ptr = fptr;
+		pfile->fd = thread_current()->fd_count;
+		thread_current()->fd_count++;
+		list_push_back(&thread_current()->opened_files, &pfile->elem);
+		res = pfile->fd;
+	}
+	return res;
+}
+
+int
+syscall_filesize(struct intr_frame *f)
+{
+	int res;
+	int fd;
+	get_addr(f->esp, &fd, 1);
+
+	lock_acquire(&filesys_lock);
+	res = file_length (search_fd(&thread_current()->opened_files, fd)->ptr);
+	lock_release(&filesys_lock);
+
+	return res;
+}
+
+int
+syscall_read(struct intr_frame *f)
+{
+	int res;
+	int size;
+	void *buffer;
+	int fd;
+
+	get_addr(f->esp, &size, 7);
+	get_addr(f->esp, &buffer, 6);
+	get_addr(f->esp, &fd, 5);
+
+	if (!is_valid_addr(buffer))
+		res = -1;
+
+	if (fd == 0)
+	{
+		int i;
+		uint8_t *buffer = buffer;
+		for (i = 0; i < size; i++)
+			buffer[i] = input_getc();
+		res = size;
+	}
+	else
+	{
+		struct process_file *pf = search_fd(&thread_current()->opened_files, fd);
+		if (pf == NULL)
+			res = -1;
+		else
+		{
+			lock_acquire(&filesys_lock);
+			res = file_read(pf->ptr, buffer, size);
+			lock_release(&filesys_lock);
+		}
+	}
+
+	return res;
+}
+
+void
+syscall_seek(struct intr_frame *f)
+{
+	int fd;
+	int pos;
+	get_addr(f->esp, &fd, 5);
+	get_addr(f->esp, &pos, 4);
+
+	lock_acquire(&filesys_lock);
+	file_seek(search_fd(&thread_current()->opened_files, pos)->ptr, fd);
+	lock_release(&filesys_lock);
+}
+
+int
+syscall_tell(struct intr_frame *f)
+{
+	int res;
+	int fd;
+	get_addr(f->esp, &fd, 1);
+
+	lock_acquire(&filesys_lock);
+	res = file_tell(search_fd(&thread_current()->opened_files, fd)->ptr);
+	lock_release(&filesys_lock);
+
+	return res;
+}
+
+void
+syscall_close(struct intr_frame *f)
+{
+	int fd;
+	get_addr(f->esp, &fd, 1);
+
+	if(fd == 1){
+		exit_process(-1);
+	}
+
+	lock_acquire(&filesys_lock);
+	clean_single_file(&thread_current()->opened_files, fd);
+	lock_release(&filesys_lock);
+}
