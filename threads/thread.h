@@ -1,13 +1,11 @@
 #ifndef THREADS_THREAD_H
 #define THREADS_THREAD_H
-#define USERPROG
+
 #include <debug.h>
+#include <hash.h>
 #include <list.h>
 #include <stdint.h>
-#include <kernel/list.h>
-#include "fixed_point.h"
-
-#include <threads/synch.h>
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -28,12 +26,8 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+/* A kernel thread or user process.
 
-
-struct lock filesys_lock; //global lock on filesystem operations.
-#define INIT_EXIT_STAT -2333 /* A kernel thread or user process.
-
-/*
    Each thread structure is stored in its own 4 kB page.  The
    thread structure itself sits at the very bottom of the page
    (at offset 0).  The rest of the page is reserved for the
@@ -98,48 +92,48 @@ struct thread
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
 
+    /* Owned by process.c. */
+    int exit_code;                      /* Exit code. */
+    struct wait_status *wait_status;    /* This process's completion status. */
+    struct list children;               /* Completion status of children. */
+
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
-    uint64_t blocked_ticks;             /* ++ Blocked ticks. */
 
+    /* Alarm clock. */
+    int64_t wakeup_time;                /* Time to wake this thread up. */
+    struct list_elem timer_elem;        /* Element in timer_wait_list. */
+    struct semaphore timer_sema;        /* Semaphore. */
 
-    int base_priority;                  /* Base priority. */
-    struct list locks;	                /* Locks that the thread is holding. */
-    struct lock *lock_waiting;          /* The lock that the thread is waiting for. */
-    int nice; /* Niceness. */
-    fixed_t recent_cpu;
-    int64_t waketick;
-
-
-
-
-    bool load_success;  //if the child process is loaded successfully
-    struct semaphore load_sema;   // semaphore to keep the thread waiting until it makes sure that the child process is successfully loaded.
-    int exit_status;
-    struct list children_list;
-    struct thread* parent;
-    struct file *self;  // its executable file
-    struct list opened_files;     //all the opened files
-    int fd_count;
-    struct child_process * waiting_child;  //pid of the child process that is currently waiting
-
-#ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-#endif
+    struct hash *pages;                 /* Page table. */
+    struct file *bin_file;              /* The binary executable. */
+
+    /* Owned by syscall.c. */
+    struct list fds;                    /* List of file descriptors. */
+    struct list mappings;               /* Memory-mapped files. */
+    int next_handle;                    /* Next handle value. */
+    void *user_esp;                     /* User's stack pointer. */
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
 
-
-  struct child_process {
-      int tid;
-      struct list_elem child_elem;   // parent's child_list
-      int exit_status;   //exit status to pass it to its parent
-      bool if_waited; // the process may wait for any given child
-      struct semaphore wait_sema;
-    };
+/* Tracks the completion of a process.
+   Reference held by both the parent, in its `children' list,
+   and by the child, in its `wait_status' pointer. */
+struct wait_status
+  {
+    struct list_elem elem;              /* `children' list element. */
+    struct lock lock;                   /* Protects ref_cnt. */
+    int ref_cnt;                        /* 2=child and parent both alive,
+                                           1=either child or parent alive,
+                                           0=child and parent both dead. */
+    tid_t tid;                          /* Child thread id. */
+    int exit_code;                      /* Child exit code, if dead. */
+    struct semaphore dead;              /* 1=child alive, 0=child dead. */
+  };
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -177,26 +171,4 @@ void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
-
-void thread_check_blocked(struct thread *, void * aux UNUSED);
-
-
-bool compare_priority(const struct list_elem *, const struct list_elem *, void *);
-void thread_update_priority(struct thread *);
-bool lock_cmp_priority(const struct list_elem *, const struct list_elem *, void *);
-void thread_remove_lock(struct lock *);
-void thread_donate_priority(struct thread *);
-void thread_hold_the_lock(struct lock *);
-
-
-void thread_mlfqs_update_priority(struct thread *);
-void thread_mlfqs_update_load_avg_and_recent_cpu(void);
-void thread_mlfqs_increase_recent_cpu_by_one(void);
-
-
-bool cmp_waketick(struct list_elem *first, struct list_elem *second, void *aux);
-
 #endif /* threads/thread.h */
-#ifdef USERPROG
-struct list_elem *find_children_list(tid_t child_tid);
-#endif
